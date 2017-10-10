@@ -1,10 +1,11 @@
 CC = gcc
 CXX = g++
-CFLAGS = $(WARN) $(OPT) $(DEBUG)
-CXXFLAGS = $(WARN) $(OPT) $(DEBUG)
+CFLAGS = $(WARN) $(OPT) $(DEBUG) $(DEFS)
+CXXFLAGS = $(WARN) $(OPT) $(DEBUG) $(DEFS)
 WARN = -Wall
 OPT = -Og
 DEBUG = -g
+DEFS = -D_GNU_SOURCE
 
 SRCS = allocmap.cc xmalloc.c
 OBJS = allocmap.o xmalloc.o
