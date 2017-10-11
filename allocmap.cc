@@ -22,22 +22,11 @@ extern "C" void* xrealloc(void*, size_t);
 
 
 namespace {
-  // const char* boxes[16] = { " ", "▘", "▝", "▀", "▖", "▌", "▞", "▛",
-  //			  "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█" };
-  // const char* hboxes[64] = { " ", "▀", " ", "▄", "█" };
-  const char* fgcolors[40] = { // "39", "31", "32", "33", "34", "35", "36", "37",
-			       "39", "38;5;1", "38;5;2", "38;5;3", "38;5;4", "38;5;5", "38;5;6", "38;5;7",
-			       "38;5;8", "38;5;9", "38;5;10", "38;5;11", "38;5;12", "38;5;13", "38;5;14", "38;5;15",
-			       "38;5;232", "38;5;233", "38;5;234", "38;5;235", "38;5;236", "38;5;237", "38;5;238", "38;5;239",
-			       "38;5;240", "38;5;241", "38;5;242", "38;5;243", "38;5;244", "38;5;245", "38;5;246", "38;5;247",
-			       "38;5;248", "38;5;249", "38;5;250", "38;5;251", "38;5;252", "38;5;253", "38;5;254", "38;5;255"
-  };
-  const char* bgcolors[40] = { //"49", "41", "42", "43", "44", "45", "46", "47",
-			       "49", "48;5;1", "48;5;2", "48;5;3", "48;5;4", "48;5;5", "48;5;6", "48;5;7",
-			       "48;5;8", "48;5;9", "48;5;10", "48;5;11", "48;5;12", "48;5;13", "48;5;14", "48;5;15",
-			       "48;5;232", "48;5;233", "48;5;234", "48;5;235", "48;5;236", "48;5;237", "48;5;238", "48;5;239",
-			       "48;5;240", "48;5;241", "48;5;242", "48;5;243", "48;5;244", "48;5;245", "48;5;246", "48;5;247",
-			       "48;5;248", "48;5;249", "48;5;250", "48;5;251", "48;5;252", "48;5;253", "48;5;254", "48;5;255"
+  const char* colors[40] = { "9", "8;5;1", "8;5;2", "8;5;3", "8;5;4", "8;5;5", "8;5;6", "8;5;7",
+			     "8;5;8", "8;5;9", "8;5;10", "8;5;11", "8;5;12", "8;5;13", "8;5;14", "8;5;15",
+			     "8;5;232", "8;5;233", "8;5;234", "8;5;235", "8;5;236", "8;5;237", "8;5;238", "8;5;239",
+			     "8;5;240", "8;5;241", "8;5;242", "8;5;243", "8;5;244", "8;5;245", "8;5;246", "8;5;247",
+			     "8;5;248", "8;5;249", "8;5;250", "8;5;251", "8;5;252", "8;5;253", "8;5;254", "8;5;255"
   };
 
 
@@ -67,13 +56,13 @@ namespace {
       if (fgidx != old_fgidx || bgidx != old_bgidx) {
 	res += "\e[";
 	if (fgidx != old_fgidx) {
-	  res += fgcolors[fgidx];
+	  res += "3"s + colors[fgidx];
 	  old_fgidx = fgidx;
 	  if (bgidx != old_bgidx)
 	    res += ';';
 	}
 	if (bgidx != old_bgidx) {
-	  res += bgcolors[bgidx];
+	  res += "4"s + colors[bgidx];
 	  old_bgidx = bgidx;
 	}
 	res += 'm';
@@ -84,12 +73,8 @@ namespace {
       --ncols;
     }
 
-    if (old_fgidx != 0) {
-      res += "\e[39";
-      if (old_bgidx != 0)
-	res += ";49";
-      res += "m";
-    }
+    if (old_fgidx != 0)
+      res += "\e[0m";
     while (ncols-- > 0)
       res += ' ';
 
@@ -279,8 +264,10 @@ int main(int argc, char* argv[])
       return 1;
     }
 
-  if (optind != argc - 1)
+  if (optind != argc - 1) {
     printf("Usage: %s [OPTION]... PID\n", argv[0]);
+    return 1;
+  }
 
   pid_t p = atoi(argv[optind]);
 
@@ -559,8 +546,6 @@ int main(int argc, char* argv[])
 	next:
 	  uint8_t *arena_mem = (uint8_t*) xmalloc(malloc_state_size);
 	  if (size_t(pread(memfd, arena_mem, malloc_state_size, main_arena_info.addr)) == malloc_state_size) {
-	    //for (int u=0;u<100;++u)printf(" %hhx", arena_mem[u]);putchar('\n');
-
 	    assert(top_offset + main_arena_info.addrsize <= malloc_state_size);
 	    uint64_t top;
 	    uint64_t system_mem;
@@ -610,13 +595,13 @@ int main(int argc, char* argv[])
     notpresent = 20
   };
 
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::unknown)] << "m████\e[0m   unknown\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::swapped)] << "m████\e[0m   swapped\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::anon4k)] << "m████\e[0m   anonymous\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::file4k)] << "m████\e[0m   file backed\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::topchunk)] << "m████\e[0m   arena top chunk\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::topchunk_notpresent)] << "m████\e[0m   arena top chunk not present\n";
-  std::cout << "    \e[" << fgcolors[uint8_t(pmstate::notpresent)] << "m████\e[0m   not present\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::unknown)] << "m████\e[0m   unknown\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::swapped)] << "m████\e[0m   swapped\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::anon4k)] << "m████\e[0m   anonymous\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::file4k)] << "m████\e[0m   file backed\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::topchunk)] << "m████\e[0m   arena top chunk\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::topchunk_notpresent)] << "m████\e[0m   arena top chunk not present\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::notpresent)] << "m████\e[0m   not present\n";
 
   auto ps = sysconf(_SC_PAGESIZE);
   auto maps = getmaps(p);
@@ -646,7 +631,7 @@ int main(int argc, char* argv[])
 		       }
 		     });
 
-      if (! m.any_present)
+      if (! m.any_present && m.r == '-')
 	continue;
     }
 
@@ -681,9 +666,9 @@ int main(int argc, char* argv[])
   if (heaps.size() > 0) {
     std::cout << std::endl;
 
-    std::cout << "    \e[" << fgcolors[uint8_t(pmstate::notpresent)] << "m████\e[0m   0 of 8 chunks used\n";
+    std::cout << "    \e[3" << colors[uint8_t(pmstate::notpresent)] << "m████\e[0m   0 of 8 chunks used\n";
     for (size_t ii = 1; ii <= 8; ++ii)
-      std::cout << "    \e[" << fgcolors[24+ii] << "m████\e[0m   " << ii << " of 8 chunks used\n";
+      std::cout << "    \e[3" << colors[24+ii] << "m████\e[0m   " << ii << " of 8 chunks used\n";
 
     uint8_t *arena_p = (uint8_t*) xmalloc(malloc_state_size);
 
