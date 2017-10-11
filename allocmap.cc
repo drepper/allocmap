@@ -1,3 +1,5 @@
+// Written by Ulrich Drepper <drepper@gmail.com>.
+// Copyright © 2017
 #include <cassert>
 #include <cstring>
 #include <fstream>
@@ -819,7 +821,7 @@ int main(int argc, char* argv[])
       auto p = textgrid(std::begin(filled), std::end(filled), nchunkcols);
       for (auto& s : p) {
 	std::cout << "  " << std::setw(16) << std::setfill('.') << std::hex << addr << "  " << s << std::endl;
-	addr += nchunkcols * 2 * malloc_chunk_size * 8;
+	addr += nchunkcols * 2 * malloc_alignment * 8;
       }
     }
 
