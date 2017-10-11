@@ -36,15 +36,6 @@ namespace {
   };
 
 
-  void* xmalloc(size_t n)
-  {
-    auto p = malloc(n);
-    if (p == nullptr)
-      error(EXIT_FAILURE, errno, "cannot allocate memory");
-    return p;
-  }
-
-
   template <class Iterator>
   std::string textgrid_line(Iterator row1, Iterator row2, unsigned ncols, unsigned ncols1, unsigned ncols2)
   {
@@ -152,10 +143,7 @@ namespace {
       ifs >> ch;
       assert(ch == '-');
       ifs >> std::hex >> end;
-      ifs >> r;
-      ifs >> w;
-      ifs >> x;
-      ifs >> p;
+      ifs >> r >> w >> x >> p;
       ifs >> std::hex >> tmp;
       ifs >> std::hex >> tmp;
       ifs >> ch;
@@ -171,6 +159,19 @@ namespace {
 
     return res;
   }
+
+
+  struct addraccess {
+    addraccess(int s) : size(s) {}
+    uint64_t operator()(const uint8_t* p, size_t off) const {
+      return size == 8 ? *(const uint64_t*)(p + off) : *(const uint32_t*)(p + off);
+    }
+    uint64_t operator()(const uint8_t* p, size_t off, size_t idx) const {
+      return size == 8 ? ((const uint64_t*)(p + off))[idx] : ((const uint32_t*)(p + off))[idx];
+    }
+  private:
+    const int size;
+  };
 
 
   const char* get_name_attr(Dwarf_Die* die)
@@ -264,14 +265,14 @@ int main(int argc, char* argv[])
   while ((opt = getopt(argc, argv, "h")) != -1)
     switch (opt) {
     case 'h':
-      printf("%s [OPTION]... PID\n", argv[0]);
+      std::cout << argv[0] << " [OPTION]... PID\n";
       return 0;
     default:
       return 1;
     }
 
   if (optind != argc - 1) {
-    printf("Usage: %s [OPTION]... PID\n", argv[0]);
+    std::cout << argv[0] << " [OPTION]... PID\n";
     return 1;
   }
 
@@ -291,7 +292,6 @@ int main(int argc, char* argv[])
 
   // find data type 'struct malloc_state'
   // find variable 'main_arena'
-
   struct main_arena_info_s {
     Dwfl_Module* mod = nullptr;
     Elf* elf = nullptr;
@@ -441,6 +441,8 @@ int main(int argc, char* argv[])
   };
   std::vector<heap_info> heaps;
 
+  addraccess aa(main_arena_info.addrsize);
+
   size_t fastbins_offset = ~size_t(0);
   size_t fastbins_count = 0;
   size_t top_offset = ~size_t(0);
@@ -550,41 +552,26 @@ int main(int argc, char* argv[])
 	  auto arena_addr = main_arena_info.addr;
 
 	next:
-	  uint8_t *arena_mem = (uint8_t*) xmalloc(malloc_state_size);
+	  auto arena_mem = new uint8_t[malloc_state_size];
 	  if (size_t(pread(memfd, arena_mem, malloc_state_size, main_arena_info.addr)) == malloc_state_size) {
 	    assert(top_offset + main_arena_info.addrsize <= malloc_state_size);
 	    uint64_t top;
 	    uint64_t system_mem;
-	    if (main_arena_info.addrsize == 8) {
-	      top = *(uint64_t*)(arena_mem + top_offset);
-	      system_mem = *(uint64_t*)(arena_mem + system_mem_offset);
-	    } else {
-	      top = *(uint32_t*)(arena_mem + top_offset);
-	      system_mem = *(uint32_t*)(arena_mem + system_mem_offset);
-	    }
+	    top = aa(arena_mem, top_offset);
+	    system_mem = aa(arena_mem, system_mem_offset);
 
-	    char top_chunk[fd_nextsize_offset];
+	    uint8_t top_chunk[fd_nextsize_offset];
 	    if (size_t(pread(memfd, top_chunk, fd_nextsize_offset, top)) == fd_nextsize_offset) {
-	      uint64_t top_size;
-	      if (main_arena_info.addrsize == 8)
-		top_size = *(uint64_t*)(top_chunk + mchunk_size_offset) & ~(uint64_t)7;
-	      else
-		top_size = *(uint32_t*)(top_chunk + mchunk_size_offset) & ~(uint32_t)7;
+	      uint64_t top_size = aa(top_chunk, mchunk_size_offset) & ~(uint64_t)7;
 
 	      heaps.emplace_back(heap_info{main_arena_info.addr, top + top_size - system_mem, top, top + top_size});
 	    }
 
-	    if (main_arena_info.addrsize == 8) {
-	      arena_addr = *(uint64_t*)(arena_mem + next_offset);
-	      if (arena_addr != main_arena_info.addr)
-		goto next;
-	    } else{
-	      arena_addr = *(uint32_t*)(arena_mem + next_offset);
-	      if (arena_addr != main_arena_info.addr)
-		goto next;
-	    }
+	    arena_addr = aa(arena_mem, next_offset);
+	    if (arena_addr != main_arena_info.addr)
+	      goto next;
 	  }
-	  free(arena_mem);
+	  delete[] arena_mem;
 	}
       }
     }
@@ -745,7 +732,7 @@ int main(int argc, char* argv[])
     for (size_t ii = 1; ii <= 8; ++ii)
       std::cout << "    \e[3" << colors[24+ii] << "m████\e[0m   " << ii << " of 8 chunks used\n";
 
-    uint8_t *arena_p = (uint8_t*) xmalloc(malloc_state_size);
+    auto arena_p = new uint8_t[malloc_state_size];
 
     for (const auto&h : heaps) {
       size_t malloc_alignment = 2 * main_arena_info.addrsize;
@@ -763,8 +750,8 @@ int main(int argc, char* argv[])
       // are used and substract one for every free chunk.
       std::fill(filled.begin(), filled.end(), 8);
 
-      auto clear = [&filled,&h,malloc_alignment](uint64_t addr){
-	auto idx = (addr-h.begin)/malloc_alignment/8;
+      auto clear = [&filled,begin=h.begin,malloc_alignment](uint64_t addr){
+	auto idx = (addr - begin) / malloc_alignment / 8;
 	--filled[idx];
 	// std::cout << "clear " << idx << std::endl;
       };
@@ -773,29 +760,22 @@ int main(int argc, char* argv[])
       for (auto a = h.top_begin + fd_offset; a < h.end; a += malloc_alignment)
 	clear(a);
 
-      printf("arena @%llx\n", (unsigned long long) h.arena);
+      std::cout << "arena @0x" << std::hex << h.arena << std::endl;
       if (size_t(pread(memfd, arena_p, malloc_state_size, h.arena)) == malloc_state_size) {
 	for (size_t i = 0; i < fastbins_count; ++i) {
 	  uint64_t binptr;
-	  if (main_arena_info.addrsize == 8)
-	    binptr = ((uint64_t*)(arena_p + fastbins_offset))[i];
-	  else
-	    binptr = ((uint32_t*)(arena_p + fastbins_offset))[i];
+	  binptr = aa(arena_p, fastbins_offset, i);
 	  while (binptr != 0) {
 	    if (binptr < h.begin || binptr >= h.end) {
 	      std::cout << "invalid binptr in binfastsY[" << i << "] = " << binptr << std::endl;
 	      break;
 	    }
 
-	    char chunk[malloc_chunk_size];
+	    uint8_t chunk[malloc_chunk_size];
 	    if (size_t(pread(memfd, chunk, malloc_chunk_size, binptr)) != malloc_chunk_size)
 	      break;
 
-	    uint64_t size;
-	    if (main_arena_info.addrsize == 8)
-	      size = *(uint64_t*)(chunk + mchunk_size_offset) & ~uint64_t(7);
-	    else
-	      size = *(uint32_t*)(chunk + mchunk_size_offset) & ~uint32_t(7);
+	    uint64_t size = aa(chunk, mchunk_size_offset) & ~uint64_t(7);
 	    assert(size >= minsize);
 	    assert((size & malloc_align_mask) == 0);
 	    uint64_t addr = binptr;
@@ -803,38 +783,24 @@ int main(int argc, char* argv[])
 	    for (; addr < binptr + size; addr += malloc_alignment)
 	      clear(addr);
 
-	    if (main_arena_info.addrsize == 8)
-	      binptr = *(uint64_t*)(chunk + fd_offset);
-	    else
-	      binptr = *(uint32_t*)(chunk + fd_offset);
+	    binptr = aa(chunk, fd_offset);
 	  }
 	}
 
 	for (size_t i = 0; i < bins_count; i += 2) {
-	  uint64_t binaddr;
-	  uint64_t binptr;
-	  if (main_arena_info.addrsize == 8) {
-	    binaddr = h.arena + bins_offset + i * sizeof(uint64_t);
-	    binptr = ((uint64_t*)(arena_p + bins_offset))[i];
-	  } else {
-	    binaddr = h.arena + bins_offset + i * sizeof(uint32_t);
-	    binptr = ((uint32_t*)(arena_p + bins_offset))[i];
-	  }
+	  uint64_t binaddr = h.arena + bins_offset + i * main_arena_info.addrsize;
+	  uint64_t binptr = aa(arena_p, bins_offset, i);
 	  while (binptr + fd_offset != uint64_t(binaddr)) {
 	    if (binptr < h.begin || binptr >= h.end) {
 	      std::cout << "invalid binptr in bins[" << i << "] = " << binptr << std::endl;
 	      break;
 	    }
 
-	    char chunk[malloc_chunk_size];
+	    uint8_t chunk[malloc_chunk_size];
 	    if (size_t(pread(memfd, chunk, malloc_chunk_size, binptr)) != malloc_chunk_size)
 	      break;
 
-	    uint64_t size;
-	    if (main_arena_info.addrsize == 8)
-	      size = *(uint64_t*)(chunk + mchunk_size_offset) & ~uint64_t(7);
-	    else
-	      size = *(uint32_t*)(chunk + mchunk_size_offset) & ~uint32_t(7);
+	    uint64_t size = aa(chunk, mchunk_size_offset) & ~uint64_t(7);
 	    assert(size >= minsize);
 	    assert((size & malloc_align_mask) == 0);
 	    uint64_t addr = binptr;
@@ -842,10 +808,7 @@ int main(int argc, char* argv[])
 	    for (; addr < binptr + size; addr += malloc_alignment)
 	      clear(addr);
 
-	    if (main_arena_info.addrsize == 8)
-	      binptr = *(uint64_t*)(chunk + fd_offset);
-	    else
-	      binptr = *(uint32_t*)(chunk + fd_offset);
+	    binptr = aa(chunk, fd_offset);
 	  }
 	}
       }
@@ -860,6 +823,6 @@ int main(int argc, char* argv[])
       }
     }
 
-    free(arena_p);
+    delete[] arena_p;
   }
 }
