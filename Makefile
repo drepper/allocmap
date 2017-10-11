@@ -7,8 +7,8 @@ OPT = -Og
 DEBUG = -g
 DEFS = -D_GNU_SOURCE
 
-SRCS = allocmap.cc xmalloc.c
-OBJS = allocmap.o xmalloc.o
+SRCS = allocmap.cc
+OBJS = allocmap.o
 LIBS = -ldw -lelf
 
 .PHONY: all clean

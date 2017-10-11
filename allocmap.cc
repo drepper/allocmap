@@ -17,9 +17,6 @@
 
 using namespace std::string_literals;
 
-extern "C" void* xmalloc(size_t);
-extern "C" void* xrealloc(void*, size_t);
-
 
 namespace {
   const char* colors[40] = { "9", "8;5;1", "8;5;2", "8;5;3", "8;5;4", "8;5;5", "8;5;6", "8;5;7",
@@ -37,6 +34,15 @@ namespace {
     /* .section_address = */ dwfl_offline_section_address,
     /* .debuginfo_path = */ &debuginfo_path,
   };
+
+
+  void* xmalloc(size_t n)
+  {
+    auto p = malloc(n);
+    if (p == nullptr)
+      error(EXIT_FAILURE, errno, "cannot allocate memory");
+    return p;
+  }
 
 
   template <class Iterator>
