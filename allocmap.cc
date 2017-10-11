@@ -275,7 +275,7 @@ int main(int argc, char* argv[])
   if (fdpm == -1)
     error(EXIT_FAILURE, errno, "cannot open pagemap");
 
-  // int fdpf = open("/proc/kpageflags", O_RDONLY);
+  int fdpf = open("/proc/kpageflags", O_RDONLY);
 
   Dwfl* dwfl = nullptr;
   dwfl = dwfl_begin(&dwfl_callbacks);
@@ -591,14 +591,22 @@ int main(int argc, char* argv[])
     file4k,
     topchunk,
     topchunk_notpresent,
+    anon2M,
+    anon1G = 8,
+    file2M = 12,
+    file1G = 13,
 
     notpresent = 20
   };
 
   std::cout << "    \e[3" << colors[uint8_t(pmstate::unknown)] << "m████\e[0m   unknown\n";
   std::cout << "    \e[3" << colors[uint8_t(pmstate::swapped)] << "m████\e[0m   swapped\n";
-  std::cout << "    \e[3" << colors[uint8_t(pmstate::anon4k)] << "m████\e[0m   anonymous\n";
-  std::cout << "    \e[3" << colors[uint8_t(pmstate::file4k)] << "m████\e[0m   file backed\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::anon4k)] << "m████\e[0m   4k anonymous  ";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::anon2M)] << "m████\e[0m   2M anonymous  ";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::anon1G)] << "m████\e[0m   1G anonymous\n";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::file4k)] << "m████\e[0m   4k file backed";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::file2M)] << "m████\e[0m   2M file backed";
+  std::cout << "    \e[3" << colors[uint8_t(pmstate::file1G)] << "m████\e[0m   1G file backed\n";
   std::cout << "    \e[3" << colors[uint8_t(pmstate::topchunk)] << "m████\e[0m   arena top chunk\n";
   std::cout << "    \e[3" << colors[uint8_t(pmstate::topchunk_notpresent)] << "m████\e[0m   arena top chunk not present\n";
   std::cout << "    \e[3" << colors[uint8_t(pmstate::notpresent)] << "m████\e[0m   not present\n";
@@ -612,7 +620,7 @@ int main(int argc, char* argv[])
     auto n = size_t(pread(fdpm, pm.data(), npages * sizeof(uint64_t), m.start / ps * sizeof(uint64_t)));
     if (n != npages * sizeof(uint64_t)) {
       if (n != 0 || m.name != "[vsyscall]"s)
-	error(EXIT_FAILURE, 0, "incomplete pagemap read");
+	error(EXIT_FAILURE, errno, "incomplete pagemap read");
       std::fill(v.begin(), v.end(), pmstate::unknown);
     } else {
       constexpr auto pm_present = uint64_t(1) << 63;
@@ -621,9 +629,9 @@ int main(int argc, char* argv[])
 
       std::transform(pm.begin(), pm.end(), v.begin(),
 		     [&m](uint64_t pm) {
+		       if (pm & pm_swapped) return pmstate::swapped;
 		       if ((pm & pm_present) == 0) return pmstate::notpresent;
 		       m.any_present = true;
-		       if (pm & pm_swapped) return pmstate::swapped;
 		       if (pm & pm_shared) {
 			 return pmstate::file4k;
 		       } else {
@@ -633,6 +641,67 @@ int main(int argc, char* argv[])
 
       if (! m.any_present && m.r == '-')
 	continue;
+
+      if (fdpf != -1) {
+	std::vector<uint64_t> pf(npages);
+	std::fill(pf.begin(), pf.end(), 0);
+
+	bool has_pfn = false;
+	size_t first_range = 0;
+	size_t first_pfn = 0;
+	for (size_t i = 0; i < npages; ++i) {
+	  if (has_pfn && (pm[i] & pm_present) && (pm[i] & ((uint64_t(1) << 55) - 1)) == first_pfn + (i - first_range))
+	    continue;
+
+	  if (has_pfn) {
+	    n = size_t(pread(fdpf, pf.data() + first_range, (i - first_range) * sizeof(uint64_t), first_pfn * sizeof(uint64_t)));
+	    if (n < (i - first_range) * sizeof(uint64_t))
+	      error(EXIT_FAILURE, errno, "incomplete pageflags read");
+	  }
+	  if (pm[i] & pm_present) {
+	    first_range = i;
+	    first_pfn = pm[i] & ((uint64_t(1) << 55) -1);
+	    has_pfn = true;
+	  } else
+	    has_pfn = false;
+	}
+	if (has_pfn) {
+	  n = size_t(pread(fdpf, pf.data() + first_range, (npages - first_range) * sizeof(uint64_t), first_pfn * sizeof(uint64_t)));
+	  if (n < (npages - first_range) * sizeof(uint64_t))
+	    error(EXIT_FAILURE, errno, "incomplete pageflags read");
+	}
+
+	constexpr uint64_t pf_compound_head = uint64_t(1) << 15;
+	constexpr uint64_t pf_compound_tail = uint64_t(1) << 16;
+	ssize_t last_head = -1;
+	for (ssize_t i = 0; i < ssize_t(npages); ++i)
+	  if (pf[i] & pf_compound_head) {
+	    if (last_head != -1)
+	      error(EXIT_FAILURE, 0, "compound head without tail");
+	    if (pf[i] & pf_compound_tail)
+	      error(EXIT_FAILURE, 0, "compound head together with tail");
+	    last_head = i;
+	  } else if (pf[i] & pf_compound_tail) {
+	    if (last_head == -1)
+	      error(EXIT_FAILURE, 0, "compound tail without head");
+	    auto nlarge = i + 1 - last_head;
+	    bool is_2M = false;
+	    if (nlarge*ps == 2*1024*1024)
+	      is_2M = true;
+	    else if (nlarge*ps != 1*1024*1024*1024)
+	      error(EXIT_FAILURE, 0, "strange page size %zu", nlarge*ps);
+
+	    for (auto j = last_head; j <= i; ++j)
+	      if (v[j] == pmstate::file4k) {
+		v[j] = is_2M ? pmstate::file2M : pmstate::file1G;
+	      } else if (v[j] == pmstate::anon4k) {
+		v[j] = is_2M ? pmstate::anon2M : pmstate::anon1G;
+	      } else
+		error(EXIT_FAILURE, 0, "huge page for mapping %d", int(v[j]));
+	  }
+
+	close(fdpf);
+      }
     }
 
     for (const auto& h : heaps)
